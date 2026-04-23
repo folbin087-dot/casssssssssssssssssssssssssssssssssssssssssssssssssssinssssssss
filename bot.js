@@ -37,6 +37,30 @@ const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 console.log('🤖 Plaid Casino Telegram Bot starting...');
 console.log('🌐 Casino URL:', CASINO_URL);
 
+// Configure the bot's default menu button to open the casino as a WebApp.
+// Without this, BotFather users often leave the menu button as a plain URL
+// link, which opens the site in an in-app browser WITHOUT passing initData –
+// that's what makes the server see the user as a regular browser visitor
+// rather than a Mini App session.
+(async () => {
+    try {
+        if (!CASINO_URL.startsWith('https://')) {
+            console.warn('⚠️  CASINO_URL must be https:// for Telegram Mini App to work');
+            return;
+        }
+        await bot.setChatMenuButton({
+            menu_button: JSON.stringify({
+                type: 'web_app',
+                text: '🎰 Играть',
+                web_app: { url: CASINO_URL },
+            }),
+        });
+        console.log('✅ Default chat menu button set to web_app ->', CASINO_URL);
+    } catch (err) {
+        console.error('⚠️  Failed to set chat menu button:', err?.message || err);
+    }
+})();
+
 // Helper functions
 const isAdmin = (userId) => ADMIN_IDS.includes(userId) || SUPER_ADMIN_IDS.includes(userId);
 

@@ -1,20 +1,5 @@
 import { useState, useEffect, useCallback } from "react"
-
-interface TelegramWebApp {
-  initDataUnsafe?: {
-    user?: {
-      id: number
-    }
-  }
-}
-
-declare global {
-  interface Window {
-    Telegram?: {
-      WebApp?: TelegramWebApp
-    }
-  }
-}
+import { getTelegramAuthContext } from "@/lib/telegram-webapp"
 
 interface UseUserBalanceReturn {
   balance: number
@@ -32,22 +17,16 @@ export function useUserBalance(): UseUserBalanceReturn {
 
   const fetchBalance = useCallback(async () => {
     try {
-      let tgId: string | null = null
-      
-      if (typeof window !== "undefined") {
-        const tg = window.Telegram?.WebApp
-        if (tg?.initDataUnsafe?.user?.id) {
-          tgId = String(tg.initDataUnsafe.user.id)
-        } else {
-          tgId = localStorage.getItem("telegram_user_id")
-        }
-      }
-      
+      const ctx = await getTelegramAuthContext()
+      const tgId = ctx.telegramId
+
       if (tgId) {
         setTelegramId(tgId)
-        const response = await fetch(`/api/auth/telegram?telegramId=${tgId}`)
+        const response = await fetch(
+          `/api/auth/telegram?telegramId=${encodeURIComponent(tgId)}`,
+        )
         const data = await response.json()
-        
+
         if (data.success && data.user) {
           setBalanceState(data.user.balance || 0)
         }
@@ -65,22 +44,26 @@ export function useUserBalance(): UseUserBalanceReturn {
 
   const setBalance = useCallback((newBalance: number) => {
     setBalanceState(newBalance)
-    // Emit event for header
-    window.dispatchEvent(new CustomEvent("balance-updated", { detail: { balance: newBalance } }))
+    window.dispatchEvent(
+      new CustomEvent("balance-updated", { detail: { balance: newBalance } }),
+    )
   }, [])
 
-  const updateBalance = useCallback((amount: number, type: "add" | "subtract") => {
-    setBalanceState(prev => {
-      const newBalance = type === "add" 
-        ? prev + amount 
-        : Math.max(0, prev - amount)
-      
-      // Emit event for header
-      window.dispatchEvent(new CustomEvent("balance-updated", { detail: { balance: newBalance } }))
-      
-      return newBalance
-    })
-  }, [])
+  const updateBalance = useCallback(
+    (amount: number, type: "add" | "subtract") => {
+      setBalanceState((prev) => {
+        const newBalance =
+          type === "add" ? prev + amount : Math.max(0, prev - amount)
+        window.dispatchEvent(
+          new CustomEvent("balance-updated", {
+            detail: { balance: newBalance },
+          }),
+        )
+        return newBalance
+      })
+    },
+    [],
+  )
 
   return {
     balance,

@@ -10,6 +10,7 @@ import AdminSettings from "@/components/admin/admin-settings"
 import AdminBonusChannels from "@/components/admin/admin-bonus-channels"
 import AdminPartners from "@/components/admin/admin-partners"
 import { Shield, ShieldAlert, AlertTriangle, Lock } from "lucide-react"
+import { getTelegramAuthContext } from "@/lib/telegram-webapp"
 
 // Regular admins can only see: stats, users, logs, promos, partners
 // Super admins (creators) can see everything including: settings (odds), telegram links
@@ -43,40 +44,43 @@ export default function AdminPage() {
   const [isDemoMode, setIsDemoMode] = useState(true)
 
   useEffect(() => {
-    // Check Telegram WebApp for user data
-    const checkAdminAccess = () => {
-      if (typeof window !== "undefined" && (window as any).Telegram?.WebApp) {
-        const tg = (window as any).Telegram.WebApp
-        const user = tg.initDataUnsafe?.user
+    let cancelled = false
 
-        if (user) {
-          setTelegramUser(user)
-          const userId = String(user.id)
-          
-          // Check if user is admin
-          if (ADMIN_IDS.includes(userId) || SUPER_ADMIN_IDS.includes(userId)) {
-            setIsAdmin(true)
-            setIsDemoMode(false)
-          }
-          
-          // Check if user is super admin (creator)
-          if (SUPER_ADMIN_IDS.includes(userId)) {
-            setIsSuperAdmin(true)
-          }
+    const checkAdminAccess = async () => {
+      const ctx = await getTelegramAuthContext()
+      if (cancelled) return
+
+      if (ctx.user) {
+        setTelegramUser({
+          id: ctx.user.id,
+          first_name: ctx.user.first_name,
+          last_name: ctx.user.last_name ?? undefined,
+          username: ctx.user.username ?? undefined,
+        })
+        const userId = String(ctx.user.id)
+        if (ADMIN_IDS.includes(userId) || SUPER_ADMIN_IDS.includes(userId)) {
+          setIsAdmin(true)
+          setIsDemoMode(false)
+        }
+        if (SUPER_ADMIN_IDS.includes(userId)) {
+          setIsSuperAdmin(true)
         }
       }
-      
-      // For development/demo, allow access
+
+      // For development/demo, allow access.
       if (process.env.NODE_ENV === "development" || ADMIN_IDS.length === 0) {
         setIsAdmin(true)
-        setIsSuperAdmin(true) // Full access in demo mode
+        setIsSuperAdmin(true)
         setIsDemoMode(true)
       }
-      
+
       setIsLoading(false)
     }
 
     checkAdminAccess()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   // Filter tabs based on admin level

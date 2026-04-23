@@ -5,6 +5,7 @@ import Link from "next/link"
 import Header from "@/components/header"
 import Footer from "@/components/footer"
 import { User, Users, Copy, TrendingUp, TrendingDown, DollarSign, History, Check, Loader2 } from "lucide-react"
+import { getTelegramAuthContext } from "@/lib/telegram-webapp"
 
 interface UserData {
   id: string
@@ -28,24 +29,6 @@ interface Transaction {
   created_at: string
 }
 
-interface TelegramWebApp {
-  initDataUnsafe: {
-    user?: {
-      id: number
-      first_name: string
-      username?: string
-    }
-  }
-}
-
-declare global {
-  interface Window {
-    Telegram?: {
-      WebApp?: TelegramWebApp
-    }
-  }
-}
-
 export default function ProfilePage() {
   const [copied, setCopied] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
@@ -57,16 +40,10 @@ export default function ProfilePage() {
   useEffect(() => {
     const loadUserData = async () => {
       try {
-        let telegramId: string | null = null
-        
-        // Try to get from Telegram WebApp
-        if (typeof window !== "undefined" && window.Telegram?.WebApp?.initDataUnsafe?.user?.id) {
-          telegramId = String(window.Telegram.WebApp.initDataUnsafe.user.id)
-        } else {
-          // Fallback to localStorage
-          telegramId = localStorage.getItem("telegram_user_id")
-        }
-        
+        // Wait for Telegram WebApp SDK to be ready (falls back to cached id).
+        const ctx = await getTelegramAuthContext()
+        const telegramId = ctx.telegramId
+
         if (!telegramId) {
           setError("Пожалуйста, откройте приложение через Telegram")
           setIsLoading(false)

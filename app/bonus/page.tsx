@@ -5,6 +5,7 @@ import Header from "@/components/header"
 import Footer from "@/components/footer"
 import { Gift, Clock, CheckCircle, Star, Coins, AlertCircle, ExternalLink, Users, Loader2 } from "lucide-react"
 import Link from "next/link"
+import { getTelegramAuthContext } from "@/lib/telegram-webapp"
 
 interface BonusState {
   dailyClaimed: boolean;
@@ -74,33 +75,21 @@ export default function BonusPage() {
     
     // Detect Telegram WebApp user ID and load balance from API
     const loadUserData = async () => {
-      let tgUserId: number | null = null
-      
-      if (typeof window !== "undefined") {
-        const tg = (window as unknown as { Telegram?: { WebApp?: { initDataUnsafe?: { user?: { id: number } } } } }).Telegram?.WebApp
-        if (tg?.initDataUnsafe?.user?.id) {
-          tgUserId = tg.initDataUnsafe.user.id
-          setTelegramUserId(tgUserId)
-        } else {
-          // Fallback to localStorage
-          const savedId = localStorage.getItem("telegram_user_id")
-          if (savedId) {
-            tgUserId = parseInt(savedId)
-            setTelegramUserId(tgUserId)
+      const ctx = await getTelegramAuthContext()
+      const tgUserId = ctx.telegramId ? parseInt(ctx.telegramId, 10) : null
+
+      if (tgUserId) {
+        setTelegramUserId(tgUserId)
+        try {
+          const response = await fetch(
+            `/api/auth/telegram?telegramId=${encodeURIComponent(String(tgUserId))}`,
+          )
+          const data = await response.json()
+          if (data.success && data.user) {
+            setBalance(data.user.balance || 0)
           }
-        }
-        
-        // Load balance from API
-        if (tgUserId) {
-          try {
-            const response = await fetch(`/api/auth/telegram?telegramId=${tgUserId}`)
-            const data = await response.json()
-            if (data.success && data.user) {
-              setBalance(data.user.balance || 0)
-            }
-          } catch (error) {
-            console.error("Failed to load user balance:", error)
-          }
+        } catch (error) {
+          console.error("Failed to load user balance:", error)
         }
       }
     }
