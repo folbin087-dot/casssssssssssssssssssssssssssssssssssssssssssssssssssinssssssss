@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useRef } from "react"
 import GameLayout from "@/components/game-layout"
 import Image from "next/image"
 import { Users, Banknote, Clock, TrendingUp } from "lucide-react"
+import { getTelegramAuthContext } from "@/lib/telegram-webapp"
 
 // Lucky Jet character with jetpack
 const LUCKY_JET_CHARACTER = "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/40cc3303-569a034abe1f9a559396542ea7faa3e2-VQtJEHDcDkURpOuh5dYVNVh5fzrnH3.webp"
@@ -51,15 +52,8 @@ export default function AviatrixPage() {
   useEffect(() => {
     const loadBalance = async () => {
       try {
-        let telegramId: string | null = null
-        if (typeof window !== "undefined") {
-          const tg = (window as unknown as { Telegram?: { WebApp?: { initDataUnsafe?: { user?: { id: number } } } } }).Telegram?.WebApp
-          if (tg?.initDataUnsafe?.user?.id) {
-            telegramId = String(tg.initDataUnsafe.user.id)
-          } else {
-            telegramId = localStorage.getItem("telegram_user_id")
-          }
-        }
+        const ctx = await getTelegramAuthContext()
+        const telegramId = ctx.telegramId
         if (telegramId) {
           const response = await fetch(`/api/auth/telegram?telegramId=${telegramId}`)
           const data = await response.json()

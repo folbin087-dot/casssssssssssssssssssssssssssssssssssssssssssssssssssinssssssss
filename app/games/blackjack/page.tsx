@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react"
 import GameLayout from "@/components/game-layout"
+import { getTelegramAuthContext } from "@/lib/telegram-webapp"
 
 type CardSuit = "hearts" | "diamonds" | "clubs" | "spades"
 type CardValue = "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "J" | "Q" | "K" | "A"
@@ -222,15 +223,8 @@ export default function BlackJackPage() {
   useEffect(() => {
     const loadBalance = async () => {
       try {
-        let telegramId: string | null = null
-        if (typeof window !== "undefined") {
-          const tg = (window as unknown as { Telegram?: { WebApp?: { initDataUnsafe?: { user?: { id: number } } } } }).Telegram?.WebApp
-          if (tg?.initDataUnsafe?.user?.id) {
-            telegramId = String(tg.initDataUnsafe.user.id)
-          } else {
-            telegramId = localStorage.getItem("telegram_user_id")
-          }
-        }
+        const ctx = await getTelegramAuthContext()
+        const telegramId = ctx.telegramId
         if (telegramId) {
           const response = await fetch(`/api/auth/telegram?telegramId=${telegramId}`)
           const data = await response.json()

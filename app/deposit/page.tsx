@@ -6,31 +6,13 @@ import Footer from "@/components/footer"
 import { ArrowLeft, Copy, Check, ExternalLink, Shield, Zap, RefreshCw } from "lucide-react"
 import Link from "next/link"
 import Image from "next/image"
+import { getTelegramAuthContext } from "@/lib/telegram-webapp"
 
 const SBP_LOGO = "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/sbp-logo-AFrVCisQm4LhFX1AXWwZreggQxYE4r.png"
 const TONKEEPER_LOGO = "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/images-FmFBTj8ziuH7dcDyZCXh1sQ88mMaJ6.png"
 
 // TON Wallet for direct payments
 const CASINO_TON_WALLET = process.env.NEXT_PUBLIC_CASINO_TON_WALLET || "EQxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-
-interface TelegramWebApp {
-  initData: string
-  initDataUnsafe: {
-    user?: {
-      id: number
-      first_name: string
-      username?: string
-    }
-  }
-}
-
-declare global {
-  interface Window {
-    Telegram?: {
-      WebApp?: TelegramWebApp
-    }
-  }
-}
 
 export default function DepositPage() {
   const [amount, setAmount] = useState(500)
@@ -94,19 +76,14 @@ export default function DepositPage() {
     return () => clearInterval(interval)
   }, [])
   
-  // Get Telegram user ID on mount
+  // Get Telegram user ID on mount (waits for the WebApp SDK).
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      // Check Telegram WebApp
-      if (window.Telegram?.WebApp?.initDataUnsafe?.user?.id) {
-        setTelegramId(String(window.Telegram.WebApp.initDataUnsafe.user.id))
-      } else {
-        // Fallback to localStorage
-        const savedId = localStorage.getItem("telegram_user_id")
-        if (savedId) {
-          setTelegramId(savedId)
-        }
-      }
+    let cancelled = false
+    getTelegramAuthContext().then((ctx) => {
+      if (!cancelled && ctx.telegramId) setTelegramId(ctx.telegramId)
+    })
+    return () => {
+      cancelled = true
     }
   }, [])
 

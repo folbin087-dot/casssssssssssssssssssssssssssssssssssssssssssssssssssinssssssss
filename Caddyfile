@@ -5,43 +5,51 @@
 {
     # Admin API
     admin localhost:2019
-    
+
     # Email for Let's Encrypt
     email admin@moneycas.live
 }
 
 # Main domain with automatic HTTPS
 moneycas.live {
-    # 🔒 TLS 1.3 only for maximum security
+    # TLS. TLS 1.2 is kept as minimum so that older mobile clients and
+    # embedded Telegram webviews can still negotiate. Restricting to 1.3
+    # only previously broke some in-app browsers.
     tls {
-        protocols tls1.3
+        protocols tls1.2 tls1.3
     }
-    
-    # 🛡 Security headers (Full Strict)
+
+    # Security headers
     header {
-        # HSTS: Force HTTPS for 1 year
+        # HSTS: force HTTPS for 1 year
         Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-        
+
         # XSS and content type protection
         X-Content-Type-Options "nosniff"
         X-XSS-Protection "1; mode=block"
-        
-        # Frame protection (SAMEORIGIN for Telegram WebApp)
-        X-Frame-Options "SAMEORIGIN"
-        
+
         # Referrer policy
         Referrer-Policy "strict-origin-when-cross-origin"
-        
-        # CSP for Telegram WebApp compatibility
-        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://telegram.org https://*.telegram.org https://static.cloudflareinsights.com https://va.vercel-scripts.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https: blob:; connect-src 'self' https://api.coingecko.com https://api.coincap.io https://api.exchangerate-api.com https://plaidprocessing.com https://api.telegram.org wss: https://*.cloudflareinsights.com; frame-ancestors 'self' https://telegram.org https://*.telegram.org; upgrade-insecure-requests"
-        
+
+        # CSP tuned for Telegram Mini App:
+        #   - script-src allows the Telegram WebApp SDK and telegram.org
+        #   - frame-ancestors explicitly allows telegram.org / web.telegram.org
+        #     so the mini app renders in an iframe on the Telegram web client
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://telegram.org https://*.telegram.org https://static.cloudflareinsights.com https://va.vercel-scripts.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https: blob:; connect-src 'self' https://api.coingecko.com https://api.coincap.io https://api.exchangerate-api.com https://plaidprocessing.com https://api.telegram.org https://toncenter.com wss: https://*.cloudflareinsights.com; frame-ancestors 'self' https://telegram.org https://*.telegram.org https://web.telegram.org; upgrade-insecure-requests"
+
+        # NOTE: we intentionally do NOT set X-Frame-Options here.
+        # Telegram Web embeds Mini Apps in an iframe served from web.telegram.org;
+        # a blanket "SAMEORIGIN" header blocks that embed even when CSP
+        # frame-ancestors would allow it (browsers honour the stricter of the two).
+        # CSP frame-ancestors above is the modern, granular replacement.
+
         # Remove server header
         -Server
     }
-    
+
     # Compression
     encode gzip zstd
-    
+
     # Reverse proxy to Next.js
     reverse_proxy localhost:3000 {
         # Forward real client IP from Cloudflare
@@ -49,19 +57,28 @@ moneycas.live {
         header_up X-Real-IP {header.CF-Connecting-IP}
         header_up X-Forwarded-For {header.CF-Connecting-IP}
         header_up X-Forwarded-Proto {scheme}
-        
-        # Health check
-        health_uri /
-        health_interval 30s
-        health_timeout 10s
+
+        # Longer timeouts for WebSocket/long-poll endpoints
+        transport http {
+            dial_timeout 5s
+            response_header_timeout 30s
+        }
     }
-    
-    # Static files caching
+
+    # Static asset caching (never applies to HTML/API responses)
     @static {
         path *.js *.css *.png *.jpg *.jpeg *.gif *.ico *.svg *.woff *.woff2 *.ttf *.eot *.webp
     }
     header @static Cache-Control "public, max-age=31536000, immutable"
-    
+
+    # Do not cache HTML pages aggressively – the Mini App page has to re-run
+    # to pick up a fresh initData signature every time a user opens it.
+    @html {
+        path / /*/ /*.html
+        not path /_next/static/*
+    }
+    header @html Cache-Control "no-store, must-revalidate"
+
     # Logging
     log {
         output file /var/snap/caddy/common/logs/moneycas.log {
@@ -76,7 +93,7 @@ moneycas.live {
 # WWW redirect
 www.moneycas.live {
     tls {
-        protocols tls1.3
+        protocols tls1.2 tls1.3
     }
     redir https://moneycas.live{uri} permanent
 }

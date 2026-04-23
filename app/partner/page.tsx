@@ -10,6 +10,7 @@ import {
   Calendar, Activity, Award, ExternalLink, Wallet,
   ChevronRight, Star
 } from "lucide-react"
+import { getTelegramAuthContext } from "@/lib/telegram-webapp"
 
 interface ReferralStats {
   total_referrals: number
@@ -61,17 +62,9 @@ export default function PartnerPage() {
   useEffect(() => {
     const loadPartnerData = async () => {
       try {
-        let telegramId: string | null = null
-        
-        if (typeof window !== "undefined") {
-          const tg = (window as { Telegram?: { WebApp?: { initDataUnsafe?: { user?: { id: number } } } } }).Telegram?.WebApp
-          if (tg?.initDataUnsafe?.user?.id) {
-            telegramId = String(tg.initDataUnsafe.user.id)
-          } else {
-            telegramId = localStorage.getItem("telegram_user_id")
-          }
-        }
-        
+        const ctx = await getTelegramAuthContext()
+        const telegramId = ctx.telegramId
+
         if (!telegramId) {
           setIsLoading(false)
           return
@@ -111,14 +104,9 @@ export default function PartnerPage() {
     setWithdrawMessage(null)
     
     try {
-      let telegramId: string | null = null
-      if (typeof window !== "undefined") {
-        const tg = (window as { Telegram?: { WebApp?: { initDataUnsafe?: { user?: { id: number } } } } }).Telegram?.WebApp
-        telegramId = tg?.initDataUnsafe?.user?.id 
-          ? String(tg.initDataUnsafe.user.id) 
-          : localStorage.getItem("telegram_user_id")
-      }
-      
+      const ctx = await getTelegramAuthContext()
+      const telegramId = ctx.telegramId
+
       const response = await fetch("/api/partner", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

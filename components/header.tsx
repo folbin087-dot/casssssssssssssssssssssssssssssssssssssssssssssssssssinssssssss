@@ -3,36 +3,7 @@
 import { useState, useEffect } from "react"
 import Link from "next/link"
 import { User, Wallet, Menu, X, Gift, Users, Shield } from "lucide-react"
-
-interface TelegramUser {
-  id: number
-  first_name: string
-  last_name?: string
-  username?: string
-  language_code?: string
-  is_premium?: boolean
-}
-
-interface TelegramWebApp {
-  initData: string
-  initDataUnsafe: {
-    user?: TelegramUser
-    query_id?: string
-    auth_date?: number
-    hash?: string
-  }
-  ready: () => void
-  expand: () => void
-  close: () => void
-}
-
-declare global {
-  interface Window {
-    Telegram?: {
-      WebApp?: TelegramWebApp
-    }
-  }
-}
+import { getTelegramAuthContext } from "@/lib/telegram-webapp"
 
 // Admin IDs from environment
 const ADMIN_IDS = (process.env.NEXT_PUBLIC_ADMIN_IDS || "").split(",").filter(Boolean)
@@ -41,89 +12,78 @@ const SUPER_ADMIN_IDS = (process.env.NEXT_PUBLIC_SUPER_ADMIN_IDS || "").split(",
 export default function Header() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [balance, setBalance] = useState(0)
-  const [telegramUser, setTelegramUser] = useState<TelegramUser | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isPartner, setIsPartner] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
 
   // Initialize Telegram WebApp and load user data
   useEffect(() => {
+    let cancelled = false
+
     const initTelegram = async () => {
       try {
-        // Check if running inside Telegram WebApp
-        if (typeof window !== "undefined" && window.Telegram?.WebApp) {
-          const tg = window.Telegram.WebApp
-          
-          // Expand the WebApp to full height
-          tg.expand()
-          tg.ready()
-          
-          const initData = tg.initData
-          const user = tg.initDataUnsafe?.user
-          
-          if (user) {
-            setTelegramUser(user)
-            
-            // Check if user is admin
-            const userId = String(user.id)
-            if (ADMIN_IDS.includes(userId) || SUPER_ADMIN_IDS.includes(userId)) {
-              setIsAdmin(true)
-            }
-            
-            // Register/login user via API
-            try {
-              const response = await fetch("/api/auth/telegram", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  initData,
-                  user: {
-                    id: user.id,
-                    first_name: user.first_name,
-                    last_name: user.last_name || null,
-                    username: user.username || null,
-                    language_code: user.language_code,
-                    is_premium: user.is_premium || false,
-                  }
-                })
-              })
-              
-              const data = await response.json()
-              if (data.success && data.user) {
-                setBalance(data.user.balance || 0)
-                setIsPartner(data.user.is_partner || false)
-                // Store user data in localStorage for other components
+        // Wait for the Telegram WebApp SDK to be ready. This is critical:
+        // the SDK script is loaded via next/script with beforeInteractive,
+        // but the helper also defensively polls in case of slow networks.
+        const ctx = await getTelegramAuthContext()
+        if (cancelled) return
+
+        if (ctx.isTelegramApp && ctx.user && ctx.initData) {
+          const userId = String(ctx.user.id)
+          if (ADMIN_IDS.includes(userId) || SUPER_ADMIN_IDS.includes(userId)) {
+            setIsAdmin(true)
+          }
+
+          try {
+            const response = await fetch("/api/auth/telegram", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ initData: ctx.initData }),
+            })
+            const data = await response.json()
+            if (!cancelled && data.success && data.user) {
+              setBalance(data.user.balance || 0)
+              setIsPartner(Boolean(data.user.is_partner))
+              setIsAdmin((prev) => prev || Boolean(data.user.is_admin))
+              try {
                 localStorage.setItem("telegram_user", JSON.stringify(data.user))
-                localStorage.setItem("telegram_user_id", String(user.id))
+                localStorage.setItem("telegram_user_id", userId)
+              } catch {
+                // storage quota / privacy mode – ignore
               }
-            } catch (error) {
-              console.error("Failed to authenticate with Telegram:", error)
             }
+          } catch (error) {
+            console.error("Failed to authenticate with Telegram:", error)
           }
         } else {
-          // Not in Telegram - try to load from localStorage
+          // Not opened from Telegram – best-effort refresh using a cached
+          // telegram_user_id so returning users still see their balance.
           const savedUser = localStorage.getItem("telegram_user")
           if (savedUser) {
             try {
               const userData = JSON.parse(savedUser)
-              setBalance(userData.balance || 0)
-              setIsPartner(userData.is_partner || false)
-            } catch (e) {
-              // Invalid data
+              if (!cancelled) {
+                setBalance(userData.balance || 0)
+                setIsPartner(Boolean(userData.is_partner))
+              }
+            } catch {
+              // Invalid cached payload – ignore.
             }
           }
-          
-          // For development/demo, allow full access
-          if (process.env.NODE_ENV === "development" || ADMIN_IDS.length === 0) {
+
+          if (
+            !cancelled &&
+            (process.env.NODE_ENV === "development" || ADMIN_IDS.length === 0)
+          ) {
             setIsAdmin(true)
             setIsPartner(true)
           }
         }
       } finally {
-        setIsLoading(false)
+        if (!cancelled) setIsLoading(false)
       }
     }
-    
+
     initTelegram()
     
     // Listen for balance updates from other components
@@ -146,6 +106,7 @@ export default function Header() {
     window.addEventListener("partner-updated", handlePartnerUpdate)
     
     return () => {
+      cancelled = true
       window.removeEventListener("balance-updated", handleBalanceUpdate)
       window.removeEventListener("partner-updated", handlePartnerUpdate)
     }
