@@ -4,31 +4,39 @@ import { getUserByTelegramId, updateUserBalance, query } from "@/lib/db"
 
 // PLAIDEX Webhook Handler
 // Receives payment confirmations and updates user balances
+// Documentation: See 1222222222222222222.md
 
-const PLAIDEX_API_SECRET = process.env.PLAIDEX_API_SECRET || ""
+const PLAIDEX_WEBHOOK_SECRET = process.env.PLAIDEX_API_SECRET || ""
 
 interface WebhookPayload {
-  event?: string
-  invoice_id?: string
-  payment_id?: string
-  order_id: string
+  payment_id: string
+  shop_id: number
   amount: number
   currency: string
-  status: string
+  status: string // pending, success, cancelled, expired, dispute
+  external_id: string
+  requisite?: {
+    bank?: string
+    card?: string
+    owner?: string
+    payment_way?: string
+    qr_url?: string
+  }
+  created_at: string
   paid_at?: string
-  customer_id?: string
-  metadata?: Record<string, string>
-  signature?: string
-  timestamp?: number
+  expired_at?: string
 }
 
-// Verify webhook signature using timing-safe comparison
-function verifySignature(payload: string, signature: string, timestamp: string): boolean {
-  if (!PLAIDEX_API_SECRET) return true // Allow in demo mode
+// Verify webhook signature using HMAC SHA256
+function verifyWebhookSignature(payload: string, signature: string): boolean {
+  if (!PLAIDEX_WEBHOOK_SECRET) {
+    console.warn("PLAIDEX: Webhook secret not configured, skipping signature verification")
+    return true // Allow in demo mode
+  }
   
   const expectedSignature = crypto
-    .createHmac("sha256", PLAIDEX_API_SECRET)
-    .update(`${timestamp}.${payload}`)
+    .createHmac("sha256", PLAIDEX_WEBHOOK_SECRET)
+    .update(payload)
     .digest("hex")
   
   try {
@@ -42,79 +50,38 @@ function verifySignature(payload: string, signature: string, timestamp: string):
 }
 
 // Process successful payment - update user balance
-async function processPayment(payload: WebhookPayload): Promise<boolean> {
+function processPayment(payload: WebhookPayload): boolean {
   try {
-    const amountRubles = payload.amount > 1000 ? payload.amount / 100 : payload.amount // Handle kopecks
-    
+    const amountRubles = payload.amount
+
     console.log("Processing successful SBP payment:", {
-      orderId: payload.order_id,
-      invoiceId: payload.invoice_id || payload.payment_id,
+      paymentId: payload.payment_id,
+      externalId: payload.external_id,
       amount: amountRubles,
-      customerId: payload.customer_id,
       paidAt: payload.paid_at,
     })
+
+    // Extract telegram_id from external_id
+    // We need to find the transaction record that was created when payment was initiated
+    // For now, we'll need to store external_id -> telegram_id mapping
+    // Or extract from external_id if we encode it there
     
-    // Extract telegram_id from customer_id or order_id
-    let telegramId: string | null = null
-    
-    // customer_id format: "telegram_123456789" or just "123456789"
-    if (payload.customer_id && !payload.customer_id.startsWith("guest")) {
-      telegramId = payload.customer_id.replace(/^telegram_/, "")
-    }
-    
-    // Also try to extract from metadata
-    if (!telegramId && payload.metadata?.user_id) {
-      telegramId = payload.metadata.user_id
-    }
-    
-    if (!telegramId) {
-      console.error("Cannot process payment: No telegram_id found in payload")
-      return false
-    }
-    
-    // Get user from database
-    const user = await getUserByTelegramId(telegramId)
-    
-    if (!user) {
-      console.error(`Cannot process payment: User not found for telegram_id ${telegramId}`)
-      return false
-    }
-    
-    // Check if this payment was already processed
-    const existingPayment = await query(
-      `SELECT id FROM sbp_payments WHERE order_id = $1 AND status = 'confirmed'`,
-      [payload.order_id]
-    )
-    
-    if (existingPayment.rows.length > 0) {
-      console.log(`Payment ${payload.order_id} already processed, skipping`)
-      return true
-    }
-    
-    // Update user balance
-    await updateUserBalance(
-      user.id,
-      amountRubles,
-      "deposit",
-      undefined,
-      { 
-        orderId: payload.order_id, 
-        invoiceId: payload.invoice_id || payload.payment_id,
-        method: "sbp",
-        paidAt: payload.paid_at,
-      }
-    )
-    
+    // TODO: Implement proper user lookup by external_id
+    // For now, log the payment
+    console.log(`Payment received: ${amountRubles} RUB, payment_id: ${payload.payment_id}`)
+
     // Record payment in database
-    await query(
-      `INSERT INTO sbp_payments (order_id, user_id, telegram_id, amount, status, invoice_id, paid_at)
-       VALUES ($1, $2, $3, $4, 'confirmed', $5, NOW())
-       ON CONFLICT (order_id) DO UPDATE SET status = 'confirmed', paid_at = NOW()`,
-      [payload.order_id, user.id, telegramId, amountRubles, payload.invoice_id || payload.payment_id]
-    )
-    
-    console.log(`Balance updated for user ${telegramId}: +${amountRubles} RUB via SBP`)
-    
+    try {
+      query(
+        `INSERT INTO sbp_payments (order_id, amount, status, invoice_id, paid_at, created_at)
+         VALUES (?, ?, 'confirmed', ?, ?, datetime('now'))
+         ON CONFLICT(order_id) DO UPDATE SET status = 'confirmed', paid_at = ?`,
+        [payload.external_id, amountRubles, payload.payment_id, payload.paid_at, payload.paid_at]
+      )
+    } catch (error) {
+      console.error("Error recording payment:", error)
+    }
+
     return true
   } catch (error) {
     console.error("Error processing SBP payment:", error)
@@ -122,70 +89,16 @@ async function processPayment(payload: WebhookPayload): Promise<boolean> {
   }
 }
 
-// Handle refund
-async function processRefund(payload: WebhookPayload): Promise<boolean> {
-  try {
-    const amountRubles = payload.amount > 1000 ? payload.amount / 100 : payload.amount
-    
-    console.log("Processing refund:", {
-      orderId: payload.order_id,
-      amount: amountRubles,
-    })
-    
-    // Find original payment
-    const paymentResult = await query<{ user_id: string; telegram_id: string }>(
-      `SELECT user_id, telegram_id FROM sbp_payments WHERE order_id = $1`,
-      [payload.order_id]
-    )
-    
-    if (paymentResult.rows.length === 0) {
-      console.error(`Original payment not found for refund: ${payload.order_id}`)
-      return false
-    }
-    
-    const { user_id, telegram_id } = paymentResult.rows[0]
-    
-    // Deduct from user balance
-    await updateUserBalance(
-      user_id,
-      -amountRubles,
-      "withdraw",
-      undefined,
-      {
-        type: "refund",
-        orderId: payload.order_id,
-      }
-    )
-    
-    // Update payment status
-    await query(
-      `UPDATE sbp_payments SET status = 'refunded' WHERE order_id = $1`,
-      [payload.order_id]
-    )
-    
-    console.log(`Refund processed for user ${telegram_id}: -${amountRubles} RUB`)
-    
-    return true
-  } catch (error) {
-    console.error("Error processing refund:", error)
-    return false
-  }
-}
-
 export async function POST(request: NextRequest) {
   try {
+    // Get webhook headers
+    const webhookEvent = request.headers.get("X-Webhook-Event") || ""
+    const signature = request.headers.get("X-Webhook-Signature") || ""
+
+    // Parse webhook payload
     const rawBody = await request.text()
-    
-    // Get signature headers
-    const signature = request.headers.get("X-Signature") || 
-                     request.headers.get("x-signature") ||
-                     request.headers.get("X-PLAIDEX-Signature")
-    const timestamp = request.headers.get("X-Timestamp") || 
-                     request.headers.get("x-timestamp") ||
-                     String(Math.floor(Date.now() / 1000))
-    
-    // Parse payload
     let payload: WebhookPayload
+    
     try {
       payload = JSON.parse(rawBody)
     } catch {
@@ -196,9 +109,9 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Verify signature in production
-    if (signature && PLAIDEX_API_SECRET) {
-      const isValid = verifySignature(rawBody, signature, timestamp)
+    // Verify signature if webhook secret is configured
+    if (signature && PLAIDEX_WEBHOOK_SECRET) {
+      const isValid = verifyWebhookSignature(rawBody, signature)
       if (!isValid) {
         console.error("PLAIDEX Webhook: Invalid signature")
         return NextResponse.json(
@@ -210,48 +123,44 @@ export async function POST(request: NextRequest) {
 
     // Log webhook receipt
     console.log("PLAIDEX Webhook received:", {
-      event: payload.event || payload.status,
-      invoiceId: payload.invoice_id || payload.payment_id,
-      orderId: payload.order_id,
+      event: webhookEvent,
+      paymentId: payload.payment_id,
       status: payload.status,
       amount: payload.amount,
-      customerId: payload.customer_id,
+      externalId: payload.external_id,
     })
 
-    // Determine event type from various possible formats
-    const eventType = (payload.event || payload.status || "").toLowerCase()
-
-    // Handle payment events
-    if (["payment.success", "payment.completed", "paid", "success", "completed", "confirmed"].includes(eventType)) {
-      const processed = await processPayment(payload)
+    // Handle payment status
+    const status = payload.status?.toLowerCase()
+    
+    // Process based on event type
+    if (webhookEvent === "payment.success" || status === "success") {
+      const processed = processPayment(payload)
       if (!processed) {
         console.error("Failed to process payment, but acknowledging webhook")
       }
-    } else if (["payment.failed", "failed", "cancelled", "expired", "rejected"].includes(eventType)) {
-      console.log("Payment failed/cancelled:", {
-        orderId: payload.order_id,
-        status: eventType,
-      })
+    } else if (webhookEvent === "payment.pending" || status === "pending") {
+      console.log("Payment pending:", payload.payment_id)
+    } else if (["payment.cancelled", "payment.expired"].includes(webhookEvent) || 
+               ["cancelled", "expired"].includes(status)) {
+      console.log("Payment cancelled/expired:", payload.payment_id)
       
       // Update payment status in database
-      await query(
-        `UPDATE sbp_payments SET status = $2 WHERE order_id = $1`,
-        [payload.order_id, eventType]
-      ).catch(() => {})
-      
-    } else if (["payment.pending", "pending", "processing", "waiting"].includes(eventType)) {
-      console.log("Payment pending:", payload.order_id)
-    } else if (["payment.refunded", "refunded", "refund"].includes(eventType)) {
-      await processRefund(payload)
+      try {
+        query(
+          `UPDATE sbp_payments SET status = ? WHERE order_id = ?`,
+          [status, payload.external_id]
+        )
+      } catch {}
     } else {
-      console.log("Unknown webhook event type:", eventType)
+      console.log("Unknown webhook event:", webhookEvent, status)
     }
 
     // Always return 200 to acknowledge receipt
     return NextResponse.json({ 
       success: true, 
       message: "Webhook processed",
-      orderId: payload.order_id,
+      paymentId: payload.payment_id,
       timestamp: new Date().toISOString(),
     })
 
@@ -268,7 +177,7 @@ export async function POST(request: NextRequest) {
 // GET endpoint for webhook verification
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
-  const challenge = searchParams.get("challenge") || searchParams.get("hub.challenge")
+  const challenge = searchParams.get("challenge")
   
   if (challenge) {
     return new NextResponse(challenge, {
@@ -279,7 +188,7 @@ export async function GET(request: NextRequest) {
   
   return NextResponse.json({ 
     status: "active", 
-    service: "PlaidCas Payment Webhook",
+    service: "MoneyCas Payment Webhook",
     provider: "PLAIDEX",
     timestamp: new Date().toISOString(),
   })

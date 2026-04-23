@@ -44,10 +44,10 @@ const defaultOdds: GameOdds = {
 }
 
 const defaultSettings: SiteSettings = {
-  siteName: "PlaidCas",
-  supportEmail: "support@plaidcas.live",
-  telegramChannel: "@plaidcas_official",
-  telegramSupport: "@plaidcas_support",
+  siteName: "BlessCas",
+  supportEmail: "support@moneycas.live",
+  telegramChannel: "@moneycas_official",
+  telegramSupport: "@moneycas_support",
   minDeposit: 100,
   maxDeposit: 500000,
   minWithdraw: 500,
@@ -80,8 +80,8 @@ export default function AdminSettings() {
   const [globalEdge, setGlobalEdge] = useState(5)
   const [activeSection, setActiveSection] = useState<"odds" | "telegram" | "limits" | "channels">("odds")
   const [bonusChannels, setBonusChannels] = useState<BonusChannel[]>([
-    { id: "1", name: "PlaidCas Новости", username: "@plaidcas_news", type: "channel", reward: 50, isActive: true },
-    { id: "2", name: "Чат игроков", username: "@plaidcas_chat", type: "group", reward: 30, isActive: true },
+    { id: "1", name: "BlessCas Новости", username: "@moneycas_news", type: "channel", reward: 50, isActive: true },
+    { id: "2", name: "Чат игроков", username: "@moneycas_chat", type: "group", reward: 30, isActive: true },
   ])
   const [newChannel, setNewChannel] = useState<Partial<BonusChannel>>({
     name: "",
@@ -424,7 +424,7 @@ export default function AdminSettings() {
   type="text"
   value={newChannel.name || ""}
   onChange={(e) => setNewChannel({ ...newChannel, name: e.target.value })}
-  placeholder="PlaidCas VIP"
+  placeholder="BlessCas VIP"
   className="w-full bg-secondary text-foreground px-3 py-2 rounded-lg outline-none border border-border/50 text-sm"
   />
   </div>

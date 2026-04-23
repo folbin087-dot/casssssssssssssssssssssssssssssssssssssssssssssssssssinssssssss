@@ -2,18 +2,18 @@ import { NextRequest, NextResponse } from "next/server"
 import crypto from "crypto"
 
 // PLAIDEX MERCHANT API Integration for SBP Payments
-// Dashboard: https://app.plaidex.space/
-// API Documentation: https://docs.plaidex.space/
+// Dashboard: https://plaidprocessing.com/
+// API Documentation: See 1222222222222222222.md
 
-const PLAIDEX_API_URL = "https://api.plaidex.space/v1"
+const PLAIDEX_API_URL = "https://plaidprocessing.com/api/public"
 
 // API credentials - MUST be set via environment variables only
-// Set PLAIDEX_API_KEY and PLAIDEX_API_SECRET in your Vercel project environment variables
+// Set PLAIDEX_API_KEY in your .env.local file
 const PLAIDEX_API_KEY = process.env.PLAIDEX_API_KEY || ""
-const PLAIDEX_API_SECRET = process.env.PLAIDEX_API_SECRET || ""
+const PLAIDEX_WEBHOOK_SECRET = process.env.PLAIDEX_API_SECRET || "" // For webhook signature verification
 
 // Site URL for callbacks
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://plaidcas.live"
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://moneycas.live"
 
 // Check if we have valid API credentials
 const hasValidCredentials = PLAIDEX_API_KEY && PLAIDEX_API_KEY !== "YOUR_API_KEY_HERE" && PLAIDEX_API_KEY.length > 20
@@ -28,74 +28,76 @@ interface PaymentRequest {
   metadata?: Record<string, string>
 }
 
+interface PlaidexPaymentResponse {
+  payment_id: string
+  shop_id: number
+  amount: number
+  currency: string
+  status: string // invoice, pending, success, cancelled, expired, dispute
+  external_id: string
+  requisite?: {
+    bank?: string
+    card?: string
+    owner?: string
+    payment_way?: string
+    payment_way_en?: string
+    qr_url?: string
+  }
+  created_at: string
+  expired_at?: string
+  paid_at?: string
+}
+
 interface PlaidexInvoiceResponse {
   success: boolean
-  invoice_id?: string
+  payment_id?: string
   payment_url?: string
-  qr_code?: string
-  sbp_link?: string
+  qr_url?: string
+  requisite?: {
+    card?: string
+    owner?: string
+    bank?: string
+    qr_url?: string
+  }
+  status?: string
   expires_at?: string
   error?: string
   message?: string
 }
 
-// Generate HMAC signature for API requests
-function generateSignature(payload: string, timestamp: string): string {
-  const signatureData = `${timestamp}.${payload}`
-  return crypto
-    .createHmac("sha256", PLAIDEX_API_SECRET)
-    .update(signatureData)
-    .digest("hex")
-}
+// PLAIDEX uses X-API-Key header, no signature needed for requests
+// Signature is only used for webhook verification
 
-// Create SBP invoice via PLAIDEX
-async function createSBPInvoice(
+// Create SBP payment via PLAIDEX
+async function createSBPPayment(
   amount: number,
-  orderId: string,
-  description: string,
-  userId?: string
+  externalId: string,
+  telegramId?: string
 ): Promise<PlaidexInvoiceResponse> {
   try {
-    const timestamp = Math.floor(Date.now() / 1000).toString()
-    
-    // Use telegramId for proper user identification
-    const customerId = telegramId || userId || `guest_${Date.now()}`
-    
     const payload = {
-      order_id: orderId,
-      amount: Math.round(amount * 100), // Amount in kopecks
+      amount: amount, // Amount in rubles (not kopecks!)
       currency: "RUB",
-      payment_method: "sbp",
-      description: description.substring(0, 255), // Max 255 chars
-      customer_id: customerId,
-      success_url: `${APP_URL}/deposit/success?orderId=${orderId}`,
-      fail_url: `${APP_URL}/deposit/fail?orderId=${orderId}`,
-      callback_url: `${APP_URL}/api/payments/plaidex/webhook`,
-      lifetime: 1800, // 30 minutes
-      metadata: {
-        source: "plaidcas",
-        user_id: customerId,
+      payment_way: "SBP", // Use canonical name from docs
+      external_id: externalId,
+      customer_data: {
         telegram_id: telegramId || "",
       }
     }
 
-    const payloadString = JSON.stringify(payload)
-    const signature = generateSignature(payloadString, timestamp)
+    console.log("[PLAIDEX] Creating payment:", payload)
 
-    const response = await fetch(`${PLAIDEX_API_URL}/invoices/create`, {
+    const response = await fetch(`${PLAIDEX_API_URL}/payment`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Api-Key": PLAIDEX_API_KEY,
-        "X-Timestamp": timestamp,
-        "X-Signature": signature,
-        "User-Agent": "PlaidCas/1.0",
+        "X-API-Key": PLAIDEX_API_KEY,
       },
-      body: payloadString,
+      body: JSON.stringify(payload),
     })
 
     const responseText = await response.text()
-    let data: Record<string, unknown>
+    let data: PlaidexPaymentResponse
     
     try {
       data = JSON.parse(responseText)
@@ -108,50 +110,45 @@ async function createSBPInvoice(
       console.error("PLAIDEX API Error:", response.status, data)
       return { 
         success: false, 
-        error: (data.message as string) || (data.error as string) || `API Error: ${response.status}` 
+        error: (data as any).message || (data as any).error || `API Error: ${response.status}` 
       }
     }
 
     // Handle successful response
-    if (data.status === "success" || data.invoice_id || data.id) {
+    // Status can be: invoice, pending, success
+    if (data.payment_id) {
       return {
         success: true,
-        invoice_id: (data.invoice_id as string) || (data.id as string),
-        payment_url: data.payment_url as string | undefined,
-        qr_code: data.qr_code as string | undefined,
-        sbp_link: data.sbp_link as string | undefined,
-        expires_at: data.expires_at as string | undefined,
+        payment_id: data.payment_id,
+        status: data.status,
+        qr_url: data.requisite?.qr_url,
+        requisite: data.requisite,
+        expires_at: data.expired_at,
       }
     }
 
     return { 
       success: false, 
-      error: (data.message as string) || (data.error as string) || "Unknown error" 
+      error: "No payment_id in response" 
     }
   } catch (error) {
-    console.error("PLAIDEX createSBPInvoice error:", error)
+    console.error("PLAIDEX createSBPPayment error:", error)
     return { success: false, error: "Network error connecting to payment provider" }
   }
 }
 
-// Check invoice status
-async function checkInvoiceStatus(invoiceId: string): Promise<{ 
+// Check payment status
+async function checkPaymentStatus(paymentId: string): Promise<{ 
   status: string
   paid: boolean
   amount?: number
   paidAt?: string 
 }> {
   try {
-    const timestamp = Math.floor(Date.now() / 1000).toString()
-    const signature = generateSignature(invoiceId, timestamp)
-
-    const response = await fetch(`${PLAIDEX_API_URL}/invoices/${invoiceId}`, {
+    const response = await fetch(`${PLAIDEX_API_URL}/payment/${paymentId}`, {
       method: "GET",
       headers: {
-        "X-Api-Key": PLAIDEX_API_KEY,
-        "X-Timestamp": timestamp,
-        "X-Signature": signature,
-        "User-Agent": "PlaidCas/1.0",
+        "X-API-Key": PLAIDEX_API_KEY,
       },
     })
 
@@ -159,17 +156,17 @@ async function checkInvoiceStatus(invoiceId: string): Promise<{
       return { status: "error", paid: false }
     }
 
-    const data = await response.json()
-    const isPaid = ["paid", "completed", "success", "confirmed"].includes(data.status?.toLowerCase())
+    const data: PlaidexPaymentResponse = await response.json()
+    const isPaid = data.status === "success"
     
     return {
       status: data.status || "unknown",
       paid: isPaid,
-      amount: data.amount ? data.amount / 100 : undefined, // Convert from kopecks
-      paidAt: data.paid_at || data.completed_at,
+      amount: data.amount,
+      paidAt: data.paid_at,
     }
   } catch (error) {
-    console.error("PLAIDEX checkInvoiceStatus error:", error)
+    console.error("PLAIDEX checkPaymentStatus error:", error)
     return { status: "error", paid: false }
   }
 }
@@ -204,46 +201,43 @@ export async function POST(request: NextRequest) {
     }
 
     // Sanitize inputs
-    const description = sanitizeInput(
-      body.description || `Пополнение баланса ${validatedAmount} ₽`,
-      255
-    )
     const telegramId = body.telegramId ? sanitizeInput(String(body.telegramId), 50) : undefined
-    const userId = body.userId ? sanitizeInput(body.userId, 50) : undefined
 
-    // Generate unique order ID (timestamp + random string)
-    const orderId = `sbp_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`
+    // Generate unique external ID (your order ID)
+    const externalId = `order_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`
     
-    // Check if API keys are properly configured
-    if (!hasValidCredentials) {
-      console.warn("PLAIDEX: API keys appear to be demo/placeholder values")
+    // Check if API key is configured
+    if (!PLAIDEX_API_KEY || PLAIDEX_API_KEY.length < 20) {
+      return NextResponse.json(
+        { success: false, error: "Payment system not configured" },
+        { status: 500 }
+      )
     }
     
-    // Log API call for debugging (remove in production)
-    console.log("[PLAIDEX] Creating invoice:", { amount: validatedAmount, orderId })
+    // Log API call for debugging
+    console.log("[PLAIDEX] Creating payment:", { amount: validatedAmount, externalId, telegramId })
 
-    // Create real SBP invoice via PLAIDEX
-    const invoice = await createSBPInvoice(
+    // Create SBP payment via PLAIDEX
+    const payment = await createSBPPayment(
       validatedAmount,
-      orderId,
-      description,
-      userId
+      externalId,
+      telegramId
     )
 
-    if (invoice.success) {
+    if (payment.success) {
       return NextResponse.json({
         success: true,
-        orderId,
-        invoiceId: invoice.invoice_id,
-        paymentUrl: invoice.payment_url,
-        qrCode: invoice.qr_code,
-        sbpLink: invoice.sbp_link,
-        expiresAt: invoice.expires_at,
+        paymentId: payment.payment_id,
+        externalId,
+        status: payment.status,
+        qrUrl: payment.qr_url,
+        requisite: payment.requisite,
+        expiresAt: payment.expires_at,
       })
     }
 
     return NextResponse.json(
-      { success: false, error: invoice.error || "Ошибка создания платежа" },
+      { success: false, error: payment.error || "Ошибка создания платежа" },
       { status: 500 }
     )
 
@@ -259,31 +253,30 @@ export async function POST(request: NextRequest) {
 // GET method for checking payment status
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
-  const invoiceId = searchParams.get("invoiceId")
-  const orderId = searchParams.get("orderId")
+  const paymentId = searchParams.get("paymentId")
 
-  if (!invoiceId && !orderId) {
+  if (!paymentId) {
     return NextResponse.json(
-      { success: false, error: "Invoice ID or Order ID required" },
+      { success: false, error: "Payment ID required" },
       { status: 400 }
     )
   }
 
   // Sanitize input
-  const id = sanitizeInput((invoiceId || orderId) as string, 100)
+  const id = sanitizeInput(paymentId, 100)
   
   if (!id) {
     return NextResponse.json(
-      { success: false, error: "Invalid ID format" },
+      { success: false, error: "Invalid payment ID format" },
       { status: 400 }
     )
   }
 
-  const status = await checkInvoiceStatus(id)
+  const status = await checkPaymentStatus(id)
   
   return NextResponse.json({
     success: true,
-    invoiceId: id,
+    paymentId: id,
     ...status,
   })
 }

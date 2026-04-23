@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { query, withTransaction, getUserByTelegramId } from "@/lib/db"
+import { query, withTransaction, getUserByTelegramId, generateUUID } from "@/lib/db"
 
 // Partner commission rate (from losses, not deposits)
 // This ensures we never lose money - partners only earn from player losses
@@ -47,26 +47,26 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: false, error: "Missing telegramId" }, { status: 400 })
     }
     
-    const user = await getUserByTelegramId(telegramId)
+    const user = getUserByTelegramId(telegramId)
     if (!user) {
       return NextResponse.json({ success: false, error: "User not found" }, { status: 404 })
     }
-    
+
     // Check if user is a partner (has any referrals or is marked as partner)
-    const isPartner = await checkIsPartner(user.id)
-    const isPremiumPartner = await checkIsPremiumPartner(user.id)
-    
+    const isPartner = checkIsPartner(user.id)
+    const isPremiumPartner = checkIsPremiumPartner(user.id)
+
     // Get referral stats
-    const stats = await getReferralStats(user.id, isPremiumPartner)
-    
+    const stats = getReferralStats(user.id, isPremiumPartner)
+
     // Get referred users list
-    const referrals = await getReferredUsers(user.id)
-    
+    const referrals = getReferredUsers(user.id)
+
     // Get daily stats for chart (last 30 days)
-    const dailyStats = await getDailyStats(user.id)
-    
+    const dailyStats = getDailyStats(user.id)
+
     // Get weekly breakdown
-    const weeklyStats = await getWeeklyStats(user.id)
+    const weeklyStats = getWeeklyStats(user.id)
     
     // Generate unique partner link
     const partnerLink = `https://t.me/plaid_casino_bot?start=ref_${user.referral_code}`
@@ -99,19 +99,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: "Missing telegramId" }, { status: 400 })
     }
     
-    const user = await getUserByTelegramId(telegramId)
+    const user = getUserByTelegramId(telegramId)
     if (!user) {
       return NextResponse.json({ success: false, error: "User not found" }, { status: 404 })
     }
-    
+
     if (action === "withdraw_commission") {
-      const result = await withdrawCommission(user.id)
+      const result = withdrawCommission(user.id)
       return NextResponse.json(result)
     }
-    
+
     if (action === "apply_for_premium") {
       // Request premium partner status (requires approval)
-      const result = await applyForPremiumPartner(user.id)
+      const result = applyForPremiumPartner(user.id)
       return NextResponse.json(result)
     }
     
@@ -123,101 +123,115 @@ export async function POST(request: NextRequest) {
 }
 
 // Helper functions
-async function checkIsPartner(userId: string): Promise<boolean> {
+function checkIsPartner(userId: string): boolean {
   // Check if user is marked as partner OR has referrals
-  const result = await query<{ is_partner: boolean; ref_count: string }>(
-    `SELECT 
-       COALESCE(is_partner, false) as is_partner,
-       (SELECT COUNT(*) FROM users WHERE referred_by = $1) as ref_count
-     FROM users WHERE id = $1`,
-    [userId]
+  const result = query<{ is_partner: number; ref_count: number }>(
+    `SELECT
+       COALESCE(is_partner, 0) as is_partner,
+       (SELECT COUNT(*) FROM users WHERE referred_by = (SELECT referral_code FROM users WHERE id = ?)) as ref_count
+     FROM users WHERE id = ?`,
+    [userId, userId]
   )
   if (result.rows.length === 0) return false
-  return result.rows[0].is_partner || parseInt(result.rows[0].ref_count) > 0
+  return result.rows[0].is_partner === 1 || result.rows[0].ref_count > 0
 }
 
-async function checkIsPremiumPartner(userId: string): Promise<boolean> {
-  const result = await query<{ is_premium_partner: boolean }>(
-    "SELECT COALESCE(is_premium_partner, false) as is_premium_partner FROM users WHERE id = $1",
+function checkIsPremiumPartner(userId: string): boolean {
+  const result = query<{ is_premium_partner: number }>(
+    "SELECT COALESCE(is_premium_partner, 0) as is_premium_partner FROM users WHERE id = ?",
     [userId]
   )
-  return result.rows[0]?.is_premium_partner || false
+  return result.rows[0]?.is_premium_partner === 1 || false
 }
 
-async function getReferralStats(userId: string, isPremium: boolean): Promise<ReferralStats> {
+function getReferralStats(userId: string, isPremium: boolean): ReferralStats {
   const commissionRate = isPremium ? PREMIUM_PARTNER_COMMISSION : PARTNER_COMMISSION_RATE
-  
+
+  // Get user referral code first
+  const userResult = query<{ referral_code: string }>(
+    "SELECT referral_code FROM users WHERE id = ?",
+    [userId]
+  )
+  const referralCode = userResult.rows[0]?.referral_code || userId
+
   // Get total referrals
-  const totalResult = await query<{ count: string }>(
-    "SELECT COUNT(*) as count FROM users WHERE referred_by = $1",
-    [userId]
+  const totalResult = query<{ count: number }>(
+    "SELECT COUNT(*) as count FROM users WHERE referred_by = ?",
+    [referralCode]
   )
-  
+
   // Get active referrals (active in last 7 days)
-  const activeResult = await query<{ count: string }>(
-    `SELECT COUNT(*) as count FROM users 
-     WHERE referred_by = $1 AND last_activity > NOW() - INTERVAL '7 days'`,
-    [userId]
+  const activeResult = query<{ count: number }>(
+    `SELECT COUNT(*) as count FROM users
+     WHERE referred_by = ? AND last_activity > datetime('now', '-7 days')`,
+    [referralCode]
   )
-  
+
   // Get wagered and losses from referrals
-  const wagerResult = await query<{ total_wagered: string; total_losses: string }>(
-    `SELECT 
+  const wagerResult = query<{ total_wagered: number; total_losses: number }>(
+    `SELECT
        COALESCE(SUM(u.total_wagered), 0) as total_wagered,
        COALESCE(SUM(u.total_wagered - u.total_won), 0) as total_losses
-     FROM users u 
-     WHERE u.referred_by = $1`,
-    [userId]
+     FROM users u
+     WHERE u.referred_by = ?`,
+    [referralCode]
   )
-  
+
   // Get commission already earned (from partner_earnings table)
-  const earnedResult = await query<{ total: string }>(
-    `SELECT COALESCE(SUM(amount), 0) as total 
-     FROM partner_earnings 
-     WHERE partner_id = $1 AND status = 'paid'`,
+  const earnedResult = query<{ total: number }>(
+    `SELECT COALESCE(SUM(amount), 0) as total
+     FROM partner_earnings
+     WHERE partner_id = ? AND status = 'paid'`,
     [userId]
   )
-  
+
   // Get pending commission
-  const pendingResult = await query<{ total: string }>(
-    `SELECT COALESCE(SUM(amount), 0) as total 
-     FROM partner_earnings 
-     WHERE partner_id = $1 AND status = 'pending'`,
+  const pendingResult = query<{ total: number }>(
+    `SELECT COALESCE(SUM(amount), 0) as total
+     FROM partner_earnings
+     WHERE partner_id = ? AND status = 'pending'`,
     [userId]
   )
-  
+
   // This week earnings
-  const weekResult = await query<{ total: string }>(
-    `SELECT COALESCE(SUM(amount), 0) as total 
-     FROM partner_earnings 
-     WHERE partner_id = $1 AND created_at > NOW() - INTERVAL '7 days'`,
+  const weekResult = query<{ total: number }>(
+    `SELECT COALESCE(SUM(amount), 0) as total
+     FROM partner_earnings
+     WHERE partner_id = ? AND created_at > datetime('now', '-7 days')`,
     [userId]
   )
-  
-  // This month earnings  
-  const monthResult = await query<{ total: string }>(
-    `SELECT COALESCE(SUM(amount), 0) as total 
-     FROM partner_earnings 
-     WHERE partner_id = $1 AND created_at > NOW() - INTERVAL '30 days'`,
+
+  // This month earnings
+  const monthResult = query<{ total: number }>(
+    `SELECT COALESCE(SUM(amount), 0) as total
+     FROM partner_earnings
+     WHERE partner_id = ? AND created_at > datetime('now', '-30 days')`,
     [userId]
   )
-  
-  const totalLosses = parseFloat(wagerResult.rows[0]?.total_losses || "0")
-  
+
+  const totalLosses = wagerResult.rows[0]?.total_losses || 0
+
   return {
-    total_referrals: parseInt(totalResult.rows[0].count),
-    active_referrals: parseInt(activeResult.rows[0].count),
-    total_wagered: parseFloat(wagerResult.rows[0]?.total_wagered || "0"),
+    total_referrals: totalResult.rows[0].count,
+    active_referrals: activeResult.rows[0].count,
+    total_wagered: wagerResult.rows[0]?.total_wagered || 0,
     total_losses: totalLosses,
-    total_commission_earned: parseFloat(earnedResult.rows[0]?.total || "0"),
-    pending_commission: Math.max(0, totalLosses * commissionRate - parseFloat(earnedResult.rows[0]?.total || "0")),
-    this_week_earnings: parseFloat(weekResult.rows[0]?.total || "0"),
-    this_month_earnings: parseFloat(monthResult.rows[0]?.total || "0"),
+    total_commission_earned: earnedResult.rows[0]?.total || 0,
+    pending_commission: Math.max(0, totalLosses * commissionRate - (earnedResult.rows[0]?.total || 0)),
+    this_week_earnings: weekResult.rows[0]?.total || 0,
+    this_month_earnings: monthResult.rows[0]?.total || 0,
   }
 }
 
-async function getReferredUsers(userId: string): Promise<ReferralUser[]> {
-  const result = await query<{
+function getReferredUsers(userId: string): ReferralUser[] {
+  // Get user referral code first
+  const userResult = query<{ referral_code: string }>(
+    "SELECT referral_code FROM users WHERE id = ?",
+    [userId]
+  )
+  const referralCode = userResult.rows[0]?.referral_code || userId
+
+  const result = query<{
     id: string
     username: string | null
     first_name: string
@@ -227,13 +241,13 @@ async function getReferredUsers(userId: string): Promise<ReferralUser[]> {
     last_activity: string
   }>(
     `SELECT id, username, first_name, created_at, total_wagered, total_won, last_activity
-     FROM users 
-     WHERE referred_by = $1 
-     ORDER BY created_at DESC 
+     FROM users
+     WHERE referred_by = ?
+     ORDER BY created_at DESC
      LIMIT 50`,
-    [userId]
+    [referralCode]
   )
-  
+
   return result.rows.map(row => ({
     id: row.id,
     username: row.username,
@@ -247,138 +261,166 @@ async function getReferredUsers(userId: string): Promise<ReferralUser[]> {
   }))
 }
 
-async function getDailyStats(userId: string): Promise<DailyStats[]> {
+function getDailyStats(userId: string): DailyStats[] {
+  // Get user referral code first
+  const userResult = query<{ referral_code: string }>(
+    "SELECT referral_code FROM users WHERE id = ?",
+    [userId]
+  )
+  const referralCode = userResult.rows[0]?.referral_code || userId
+
   // Get last 30 days of stats
-  const result = await query<{
+  const result = query<{
     date: string
-    new_refs: string
-    wagered: string
-    losses: string
+    new_refs: number
+    wagered: number
+    losses: number
   }>(
-    `SELECT 
-       DATE(u.created_at) as date,
+    `SELECT
+       date(u.created_at) as date,
        COUNT(*) as new_refs,
        COALESCE(SUM(u.total_wagered), 0) as wagered,
        COALESCE(SUM(u.total_wagered - u.total_won), 0) as losses
      FROM users u
-     WHERE u.referred_by = $1 
-       AND u.created_at > NOW() - INTERVAL '30 days'
-     GROUP BY DATE(u.created_at)
+     WHERE u.referred_by = ?
+       AND u.created_at > datetime('now', '-30 days')
+     GROUP BY date(u.created_at)
      ORDER BY date DESC`,
-    [userId]
+    [referralCode]
   )
-  
+
   return result.rows.map(row => ({
     date: row.date,
-    new_referrals: parseInt(row.new_refs),
-    total_wagered: parseFloat(row.wagered),
-    total_losses: parseFloat(row.losses),
-    commission_earned: parseFloat(row.losses) * PARTNER_COMMISSION_RATE,
+    new_referrals: row.new_refs,
+    total_wagered: row.wagered,
+    total_losses: row.losses,
+    commission_earned: row.losses * PARTNER_COMMISSION_RATE,
   }))
 }
 
-async function getWeeklyStats(userId: string) {
-  const result = await query<{
+function getWeeklyStats(userId: string) {
+  // Get user referral code first
+  const userResult = query<{ referral_code: string }>(
+    "SELECT referral_code FROM users WHERE id = ?",
+    [userId]
+  )
+  const referralCode = userResult.rows[0]?.referral_code || userId
+
+  const result = query<{
     week: string
-    new_refs: string
-    wagered: string
-    losses: string
+    new_refs: number
+    wagered: number
+    losses: number
   }>(
-    `SELECT 
-       DATE_TRUNC('week', u.created_at) as week,
+    `SELECT
+       strftime('%Y-%W', u.created_at) as week,
        COUNT(*) as new_refs,
        COALESCE(SUM(u.total_wagered), 0) as wagered,
        COALESCE(SUM(u.total_wagered - u.total_won), 0) as losses
      FROM users u
-     WHERE u.referred_by = $1 
-       AND u.created_at > NOW() - INTERVAL '12 weeks'
-     GROUP BY DATE_TRUNC('week', u.created_at)
+     WHERE u.referred_by = ?
+       AND u.created_at > datetime('now', '-84 days')
+     GROUP BY strftime('%Y-%W', u.created_at)
      ORDER BY week DESC`,
-    [userId]
+    [referralCode]
   )
-  
+
   return result.rows.map(row => ({
     week: row.week,
-    new_referrals: parseInt(row.new_refs),
-    total_wagered: parseFloat(row.wagered),
-    total_losses: parseFloat(row.losses),
-    commission_earned: parseFloat(row.losses) * PARTNER_COMMISSION_RATE,
+    new_referrals: row.new_refs,
+    total_wagered: row.wagered,
+    total_losses: row.losses,
+    commission_earned: row.losses * PARTNER_COMMISSION_RATE,
   }))
 }
 
-async function withdrawCommission(userId: string): Promise<{ success: boolean; amount?: number; error?: string }> {
-  return withTransaction(async (client) => {
+function withdrawCommission(userId: string): { success: boolean; amount?: number; error?: string } {
+  return withTransaction(() => {
+    // Get user referral code
+    const userResult = query<{ referral_code: string }>(
+      "SELECT referral_code FROM users WHERE id = ?",
+      [userId]
+    )
+    const referralCode = userResult.rows[0]?.referral_code || userId
+
     // Calculate available commission
-    const statsResult = await client.query<{ total_wagered: string; total_won: string }>(
-      `SELECT 
+    const statsResult = query<{ total_wagered: number; total_won: number }>(
+      `SELECT
          COALESCE(SUM(u.total_wagered), 0) as total_wagered,
          COALESCE(SUM(u.total_won), 0) as total_won
-       FROM users u 
-       WHERE u.referred_by = $1`,
+       FROM users u
+       WHERE u.referred_by = ?`,
+      [referralCode]
+    )
+
+    const paidResult = query<{ total: number }>(
+      `SELECT COALESCE(SUM(amount), 0) as total
+       FROM partner_earnings
+       WHERE partner_id = ? AND status = 'paid'`,
       [userId]
     )
-    
-    const paidResult = await client.query<{ total: string }>(
-      `SELECT COALESCE(SUM(amount), 0) as total 
-       FROM partner_earnings 
-       WHERE partner_id = $1 AND status = 'paid'`,
-      [userId]
-    )
-    
-    const totalLosses = parseFloat(statsResult.rows[0]?.total_wagered || "0") - 
-                        parseFloat(statsResult.rows[0]?.total_won || "0")
+
+    const totalLosses = (statsResult.rows[0]?.total_wagered || 0) - (statsResult.rows[0]?.total_won || 0)
     const totalEarned = Math.max(0, totalLosses * PARTNER_COMMISSION_RATE)
-    const alreadyPaid = parseFloat(paidResult.rows[0]?.total || "0")
+    const alreadyPaid = paidResult.rows[0]?.total || 0
     const available = totalEarned - alreadyPaid
-    
+
     if (available < 100) {
       return { success: false, error: "Минимальная сумма для вывода: 100 ₽" }
     }
-    
+
+    // Get current balance
+    const balanceResult = query<{ balance: number }>(
+      'SELECT balance FROM users WHERE id = ?',
+      [userId]
+    )
+    const currentBalance = balanceResult.rows[0]?.balance || 0
+    const newBalance = currentBalance + available
+
     // Record the withdrawal
-    await client.query(
-      `INSERT INTO partner_earnings (partner_id, amount, status, created_at)
-       VALUES ($1, $2, 'paid', NOW())`,
-      [userId, available]
+    const earningId = generateUUID()
+    query(
+      `INSERT INTO partner_earnings (id, partner_id, amount, status, created_at)
+       VALUES (?, ?, ?, 'paid', datetime('now'))`,
+      [earningId, userId, available]
     )
-    
+
     // Add to user balance
-    await client.query(
-      `UPDATE users SET balance = balance + $2 WHERE id = $1`,
-      [userId, available]
+    query(
+      `UPDATE users SET balance = ? WHERE id = ?`,
+      [newBalance, userId]
     )
-    
+
     // Record transaction
-    await client.query(
-      `INSERT INTO transactions (user_id, type, amount, balance_before, balance_after, metadata)
-       VALUES ($1, 'referral', $2, 
-         (SELECT balance - $2 FROM users WHERE id = $1),
-         (SELECT balance FROM users WHERE id = $1),
-         '{"type": "partner_withdrawal"}')`,
-      [userId, available]
+    const transactionId = generateUUID()
+    query(
+      `INSERT INTO transactions (id, user_id, type, amount, balance_before, balance_after, metadata)
+       VALUES (?, ?, 'referral', ?, ?, ?, ?)`,
+      [transactionId, userId, available, currentBalance, newBalance, JSON.stringify({type: "partner_withdrawal"})]
     )
-    
+
     return { success: true, amount: available }
   })
 }
 
-async function applyForPremiumPartner(userId: string): Promise<{ success: boolean; message: string }> {
+function applyForPremiumPartner(userId: string): { success: boolean; message: string } {
   // Check if already applied
-  const existing = await query(
-    `SELECT 1 FROM partner_applications WHERE user_id = $1 AND status = 'pending'`,
+  const existing = query(
+    `SELECT 1 FROM partner_applications WHERE user_id = ? AND status = 'pending'`,
     [userId]
   )
-  
+
   if (existing.rows.length > 0) {
     return { success: false, message: "Заявка уже отправлена и ожидает рассмотрения" }
   }
-  
-  await query(
-    `INSERT INTO partner_applications (user_id, status, created_at)
-     VALUES ($1, 'pending', NOW())
-     ON CONFLICT (user_id) DO UPDATE SET status = 'pending', created_at = NOW()`,
-    [userId]
+
+  const applicationId = generateUUID()
+  query(
+    `INSERT INTO partner_applications (id, user_id, status, created_at)
+     VALUES (?, ?, 'pending', datetime('now'))
+     ON CONFLICT(user_id) DO UPDATE SET status = 'pending', created_at = datetime('now')`,
+    [applicationId, userId]
   )
-  
+
   return { success: true, message: "Заявка на премиум-партнерство отправлена" }
 }

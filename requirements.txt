@@ -1,0 +1,104 @@
+# ===========================================
+# System Requirements for BlessCas2 Casino
+# ===========================================
+
+## Node.js Version
+node >= 18.0.0
+npm >= 9.0.0
+
+## Database
+mysql >= 8.0
+# or
+mariadb >= 10.6
+
+## Web Server (optional but recommended)
+caddy >= 2.7
+# or
+nginx >= 1.24
+
+## Process Manager (for production)
+pm2 >= 5.0
+# or
+systemd (built-in)
+
+## Required System Packages (Ubuntu/Debian)
+# sudo apt update
+# sudo apt install -y mysql-server nodejs npm caddy
+
+## Required System Packages (CentOS/RHEL)
+# sudo yum install -y mysql-server nodejs npm
+
+## Required System Packages (macOS with Homebrew)
+# brew install mysql node caddy
+
+## Environment Variables Required
+# See .env.local.example for full list
+# Minimum required:
+# - DATABASE_URL (mysql://user:pass@host:port/db)
+# - TELEGRAM_BOT_TOKEN
+# - NEXT_PUBLIC_APP_URL
+
+## Installation Steps
+# 1. Install system dependencies (see above)
+# 2. Copy .env.local.example to .env.local and configure
+# 3. Run: npm install
+# 4. Run: node scripts/init-database.js
+# 5. Build: npm run build
+# 6. Start: npm run start (or pm2 start npm --name "casino" -- start)
+
+## Development
+# npm run dev
+
+## Production
+# npm run build
+# npm run start
+# or with PM2:
+# pm2 start npm --name "casino" -- start
+# pm2 save
+# pm2 startup
+
+## Caddy Setup (reverse proxy with SSL)
+# 1. Copy Caddyfile to /etc/caddy/Caddyfile
+# 2. sudo systemctl restart caddy
+# 3. Caddy will automatically obtain SSL certificate
+
+## MySQL Setup
+# 1. sudo mysql_secure_installation
+# 2. Create database: CREATE DATABASE casino CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+# 3. Create user: CREATE USER 'casino'@'localhost' IDENTIFIED BY 'strong_password';
+# 4. Grant privileges: GRANT ALL PRIVILEGES ON casino.* TO 'casino'@'localhost';
+# 5. FLUSH PRIVILEGES;
+
+## Firewall (if using UFW)
+# sudo ufw allow 80/tcp
+# sudo ufw allow 443/tcp
+# sudo ufw allow 22/tcp
+# sudo ufw enable
+
+## SSL (handled automatically by Caddy)
+# For Full Strict SSL, ensure your origin server (Next.js) also uses HTTPS
+# Or use Caddy's reverse proxy which handles TLS termination
+
+## Health Check Endpoint
+# The application exposes health check at /
+# Caddy is configured to check this every 30 seconds
+
+## Log Locations
+# Application: /var/log/caddy/plaidcas.log (via Caddy)
+# MySQL: /var/log/mysql/
+# System: journalctl -u caddy, journalctl -u mysql
+
+## Backup Recommendations
+# 1. Database: mysqldump -u root -p casino > backup_$(date +%Y%m%d).sql
+# 2. Application files: /var/www/casino/
+# 3. Environment files: .env.local
+
+## Security Checklist
+# [ ] Change default MySQL root password
+# [ ] Use strong database password in DATABASE_URL
+# [ ] Enable firewall (ufw/iptables)
+# [ ] Configure fail2ban for SSH
+# [ ] Regular security updates: sudo apt update && sudo apt upgrade
+# [ ] Enable HSTS (configured in Caddyfile)
+# [ ] Review CSP headers in Caddyfile
+# [ ] Disable server tokens (configured in Caddyfile)

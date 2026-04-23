@@ -11,9 +11,9 @@ const TelegramBot = require('node-telegram-bot-api');
 
 // Bot configuration
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'plaid_casino_bot';
-const CASINO_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://plaidcas.live';
-const CASINO_NAME = process.env.CASINO_NAME || 'Plaid Casino';
+const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'money_casino_bot';
+const CASINO_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://moneycas.live';
+const CASINO_NAME = process.env.CASINO_NAME || 'Bless Casino';
 
 // Admin settings
 const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(id => parseInt(id.trim())) : [];

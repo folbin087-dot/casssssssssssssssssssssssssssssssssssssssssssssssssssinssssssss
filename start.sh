@@ -1,7 +1,7 @@
 #!/bin/bash
 #============================================
-# PlaidCas Casino - Startup Script
-# Domain: plaidcas.live
+# BlessCas Casino - Startup Script
+# Domain: moneycas.live
 #============================================
 
 set -e
@@ -15,7 +15,7 @@ NC='\033[0m' # No Color
 
 echo ""
 echo "=========================================="
-echo "   PlaidCas Casino Startup Script"
+echo "   BlessCas Casino Startup Script"
 echo "=========================================="
 echo ""
 
@@ -239,7 +239,7 @@ fi
 show_menu() {
     echo ""
     echo "=========================================="
-    echo " 🎰 PlaidCas Casino - Startup Menu"
+    echo " 🎰 BlessCas Casino - Startup Menu"
     echo "=========================================="
     echo ""
     echo "  🌐 WEBSITE OPTIONS:"
@@ -260,7 +260,7 @@ show_menu() {
     echo ""
     echo "  11. ❌ Exit"
     echo ""
-    echo "  💡 TIP: Use option 5 to start bot + website on plaidcas.live domain!"
+    echo "  💡 TIP: Use option 5 to start bot + website on moneycas.live domain!"
     echo ""
 }
 
@@ -272,7 +272,7 @@ run_dev() {
     echo -e "${BLUE}[INFO]${NC} Press Ctrl+C to stop"
     echo ""
     if [ "$PKG_MANAGER" = "npm" ]; then
-        npx next dev --no-turbo
+        npx next dev
     else
         $PKG_MANAGER run dev
     fi
@@ -283,7 +283,7 @@ run_build_start() {
     echo ""
     echo -e "${BLUE}[INFO]${NC} Building for production..."
     if [ "$PKG_MANAGER" = "npm" ]; then
-        npx next build --no-turbo
+        npx next build
     else
         $PKG_MANAGER run build
     fi
@@ -322,7 +322,7 @@ run_build() {
     echo ""
     echo -e "${BLUE}[INFO]${NC} Building for production..."
     if [ "$PKG_MANAGER" = "npm" ]; then
-        npx next build --no-turbo
+        npx next build
     else
         $PKG_MANAGER run build
     fi
@@ -372,7 +372,7 @@ start_everything() {
     if [ ! -d ".next" ]; then
         echo -e "${BLUE}[INFO]${NC} 🔨 Building website first..."
         if [ "$PKG_MANAGER" = "npm" ]; then
-            npx next build --no-turbo
+            npx next build
         else
             $PKG_MANAGER run build
         fi
@@ -404,7 +404,7 @@ start_everything() {
     fi
     
     echo -e "${BLUE}[INFO]${NC} 🌐 Starting Caddy server..."
-    sudo caddy start --config Caddyfile
+    sudo systemctl restart caddy-custom
     
     pm2 save
     
@@ -413,7 +413,7 @@ start_everything() {
     echo -e "${GREEN}[SUCCESS]${NC} 🎉 EVERYTHING IS RUNNING!"
     echo "=========================================="
     echo ""
-    echo -e "${GREEN}✅ Website:${NC} https://plaidcas.live"
+    echo -e "${GREEN}✅ Website:${NC} https://moneycas.live"
     echo -e "${GREEN}✅ Local:${NC}   http://localhost:3000"
     echo -e "${GREEN}✅ Bot:${NC}     Running in background"
     echo -e "${GREEN}✅ Caddy:${NC}   Handling SSL & domain"
@@ -438,11 +438,9 @@ stop_everything() {
         echo -e "${GREEN}[SUCCESS]${NC} ✅ PM2 processes stopped"
     fi
     
-    if command -v caddy &> /dev/null; then
-        echo -e "${BLUE}[INFO]${NC} 🛑 Stopping Caddy..."
-        sudo caddy stop 2>/dev/null || true
-        echo -e "${GREEN}[SUCCESS]${NC} ✅ Caddy stopped"
-    fi
+    echo -e "${BLUE}[INFO]${NC} 🛑 Stopping Caddy..."
+    sudo systemctl stop caddy-custom 2>/dev/null || true
+    echo -e "${GREEN}[SUCCESS]${NC} ✅ Caddy stopped"
     
     echo ""
     echo -e "${GREEN}[SUCCESS]${NC} 🎉 Everything stopped!"
@@ -460,10 +458,10 @@ start_caddy() {
         return
     fi
     
-    sudo caddy start --config Caddyfile
+    sudo systemctl restart caddy-custom
     echo ""
     echo -e "${GREEN}[SUCCESS]${NC} ✅ Caddy started!"
-    echo -e "${BLUE}[INFO]${NC} Domain: https://plaidcas.live"
+    echo -e "${BLUE}[INFO]${NC} Domain: https://moneycas.live"
     echo -e "${BLUE}[INFO]${NC} Make sure your website is running on localhost:3000"
     echo ""
 }
@@ -497,8 +495,8 @@ check_config() {
             echo -e "${RED}❌ Admin IDs not configured${NC}"
         fi
         
-        if grep -q "plaidcas.live" .env.local; then
-            echo -e "${GREEN}✅ Domain configured (plaidcas.live)${NC}"
+        if grep -q "moneycas.live" .env.local; then
+            echo -e "${GREEN}✅ Domain configured (moneycas.live)${NC}"
         else
             echo -e "${RED}❌ Domain not configured${NC}"
         fi
@@ -509,7 +507,7 @@ check_config() {
     
     echo ""
     echo -e "${BLUE}[INFO]${NC} Bot username: @plaid_casino_bot"
-    echo -e "${BLUE}[INFO]${NC} Casino domain: https://plaidcas.live"
+    echo -e "${BLUE}[INFO]${NC} Casino domain: https://moneycas.live"
     echo -e "${BLUE}[INFO]${NC} Min bet: 10₽, Max bet: 500,000₽"
     echo -e "${BLUE}[INFO]${NC} TON payments: ✅ Enabled"
     echo -e "${BLUE}[INFO]${NC} SBP payments: ✅ Enabled (Т-банк)"
@@ -531,15 +529,13 @@ check_status() {
     fi
     
     # Check Caddy
-    if command -v caddy &> /dev/null; then
-        echo -e "${BLUE}[CADDY STATUS]${NC}"
-        if sudo caddy list 2>/dev/null | grep -q "plaidcas.live"; then
-            echo -e "${GREEN}✅ Caddy is running${NC}"
-        else
-            echo -e "${RED}❌ Caddy is not running${NC}"
-        fi
-        echo ""
+    echo -e "${BLUE}[CADDY STATUS]${NC}"
+    if sudo systemctl is-active caddy-custom &>/dev/null; then
+        echo -e "${GREEN}✅ Caddy is running${NC}"
+    else
+        echo -e "${RED}❌ Caddy is not running${NC}"
     fi
+    echo ""
     
     # Check if port 3000 is in use
     echo -e "${BLUE}[PORT 3000 STATUS]${NC}"
@@ -552,10 +548,10 @@ check_status() {
     
     # Check domain connectivity
     echo -e "${BLUE}[DOMAIN CHECK]${NC}"
-    if curl -s -o /dev/null -w "%{http_code}" https://plaidcas.live | grep -q "200\|301\|302"; then
-        echo -e "${GREEN}✅ plaidcas.live is accessible${NC}"
+    if curl -s -o /dev/null -w "%{http_code}" https://moneycas.live | grep -q "200\|301\|302"; then
+        echo -e "${GREEN}✅ moneycas.live is accessible${NC}"
     else
-        echo -e "${RED}❌ plaidcas.live is not accessible${NC}"
+        echo -e "${RED}❌ moneycas.live is not accessible${NC}"
     fi
     echo ""
 }

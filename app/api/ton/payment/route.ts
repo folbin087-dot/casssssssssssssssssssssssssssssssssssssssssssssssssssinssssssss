@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify user exists
-    const user = await getUserByTelegramId(String(telegramId))
+    const user = getUserByTelegramId(String(telegramId))
     if (!user) {
       return NextResponse.json(
         { error: "User not found. Please authenticate first." },
@@ -45,16 +45,16 @@ export async function POST(request: NextRequest) {
 
     // Generate unique payment ID
     const paymentId = `ton_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
-    
+
     // Create payment memo for tracking - includes user telegram_id
     const memo = `dep_${telegramId}_${paymentId}`
 
     // Store pending payment in database
     try {
-      await query(
+      query(
         `INSERT INTO ton_payments (id, user_id, telegram_id, ton_amount, rub_amount, memo, status)
-         VALUES ($1, $2, $3, $4, $5, $6, 'pending')
-         ON CONFLICT (id) DO NOTHING`,
+         VALUES (?, ?, ?, ?, ?, ?, 'pending')
+         ON CONFLICT(id) DO NOTHING`,
         [paymentId, user.id, telegramId, tonAmount, rubAmount, memo]
       )
     } catch (error) {
@@ -96,13 +96,13 @@ export async function GET(request: NextRequest) {
   if (paymentId) {
     // Check specific payment in database
     try {
-      const result = await query<PendingPayment>(
-        "SELECT * FROM ton_payments WHERE id = $1",
+      const result = query<PendingPayment>(
+        "SELECT * FROM ton_payments WHERE id = ?",
         [paymentId]
       )
-      
+
       const payment = result.rows[0]
-      
+
       if (!payment) {
         return NextResponse.json(
           { error: "Payment not found" },
@@ -113,8 +113,8 @@ export async function GET(request: NextRequest) {
       // Check if expired (30 minutes)
       const createdAt = new Date(payment.created_at).getTime()
       if (Date.now() - createdAt > 30 * 60 * 1000 && payment.status === "pending") {
-        await query(
-          "UPDATE ton_payments SET status = 'expired' WHERE id = $1",
+        query(
+          "UPDATE ton_payments SET status = 'expired' WHERE id = ?",
           [paymentId]
         )
         payment.status = "expired"
@@ -141,15 +141,15 @@ export async function GET(request: NextRequest) {
   if (telegramId) {
     // Get all payments for user
     try {
-      const result = await query<PendingPayment>(
-        `SELECT * FROM ton_payments 
-         WHERE telegram_id = $1 
-         ORDER BY created_at DESC 
+      const result = query<PendingPayment>(
+        `SELECT * FROM ton_payments
+         WHERE telegram_id = ?
+         ORDER BY created_at DESC
          LIMIT 50`,
         [telegramId]
       )
 
-      return NextResponse.json({ 
+      return NextResponse.json({
         payments: result.rows.map(p => ({
           paymentId: p.id,
           tonAmount: p.ton_amount,
@@ -187,11 +187,11 @@ export async function PUT(request: NextRequest) {
     }
 
     // Get payment from database
-    const paymentResult = await query<PendingPayment>(
-      "SELECT * FROM ton_payments WHERE id = $1",
+    const paymentResult = query<PendingPayment>(
+      "SELECT * FROM ton_payments WHERE id = ?",
       [paymentId]
     )
-    
+
     const payment = paymentResult.rows[0]
     if (!payment) {
       return NextResponse.json(
@@ -211,12 +211,12 @@ export async function PUT(request: NextRequest) {
     if (txHash) {
       try {
         const txResponse = await fetch(`${TON_API_URL}/blockchain/transactions/${txHash}`)
-        
+
         if (txResponse.ok) {
           const txData = await txResponse.json()
           const txAmount = Number(txData.in_msg?.value || 0) / 1e9
           const txMemo = txData.in_msg?.message || ""
-          
+
           // Verify amount matches (with small tolerance for fees)
           if (Math.abs(txAmount - payment.ton_amount) > 0.01) {
             return NextResponse.json(
@@ -224,7 +224,7 @@ export async function PUT(request: NextRequest) {
               { status: 400 }
             )
           }
-          
+
           // Verify memo contains our payment info
           if (!txMemo.includes(payment.telegram_id)) {
             return NextResponse.json(
@@ -240,7 +240,7 @@ export async function PUT(request: NextRequest) {
     }
 
     // Get user
-    const user = await getUserByTelegramId(payment.telegram_id)
+    const user = getUserByTelegramId(payment.telegram_id)
     if (!user) {
       return NextResponse.json(
         { error: "User not found" },
@@ -249,7 +249,7 @@ export async function PUT(request: NextRequest) {
     }
 
     // Update user balance
-    await updateUserBalance(
+    updateUserBalance(
       user.id,
       payment.rub_amount,
       "deposit",
@@ -263,11 +263,11 @@ export async function PUT(request: NextRequest) {
     )
 
     // Mark payment as confirmed
-    await query(
-      `UPDATE ton_payments 
-       SET status = 'confirmed', confirmed_at = NOW(), tx_hash = $2 
-       WHERE id = $1`,
-      [paymentId, txHash]
+    query(
+      `UPDATE ton_payments
+       SET status = 'confirmed', confirmed_at = datetime('now'), tx_hash = ?
+       WHERE id = ?`,
+      [txHash, paymentId]
     )
 
     console.log(`TON Payment confirmed: ${paymentId} - ${payment.rub_amount} RUB for user ${payment.telegram_id}`)

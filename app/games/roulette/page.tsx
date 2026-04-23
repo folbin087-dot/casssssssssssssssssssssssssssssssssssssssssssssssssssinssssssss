@@ -171,8 +171,7 @@ export default function RoulettePage() {
     // When players bet big, slightly bias toward unfavorable outcomes
     let winIndex: number
     let winNumber: number
-    
-    const currentBets = betsRef.current
+
     const hasBigBet = currentBets.some(b => b.amount >= 100)
     
     // 8% chance of zero (normal is ~2.7%) - primary house edge source

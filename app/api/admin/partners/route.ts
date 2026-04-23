@@ -4,66 +4,44 @@ import { query } from "@/lib/db"
 // GET all partners with their aggregated stats from partner_stats view
 export async function GET() {
   try {
-    // Fetch all users who have at least 1 referral OR are marked as partners
-    const partnersResult = await query<{
+    // Get all partners with stats
+    const result = query<{
       id: string
       telegram_id: string
       username: string | null
       first_name: string
-      referral_code: string
-      is_premium_partner: boolean
-      total_referrals: string
-      active_referrals: string
-      total_referral_wagered: string
-      total_referral_losses: string
-      total_paid: string
-      pending_earnings: string
-    }>(`
-      SELECT
-        p.id,
-        p.telegram_id,
-        p.username,
-        p.first_name,
-        p.referral_code,
-        COALESCE(p.is_premium_partner, false) as is_premium_partner,
-        COUNT(DISTINCT r.id)::text as total_referrals,
-        COUNT(DISTINCT CASE WHEN r.last_activity > NOW() - INTERVAL '7 days' THEN r.id END)::text as active_referrals,
-        COALESCE(SUM(r.total_wagered), 0)::text as total_referral_wagered,
-        COALESCE(SUM(r.total_wagered - r.total_won), 0)::text as total_referral_losses,
-        COALESCE((
-          SELECT SUM(amount) FROM partner_earnings
-          WHERE partner_id = p.id AND status = 'paid'
-        ), 0)::text as total_paid,
-        COALESCE((
-          SELECT SUM(amount) FROM partner_earnings
-          WHERE partner_id = p.id AND status = 'pending'
-        ), 0)::text as pending_earnings
-      FROM users p
-      LEFT JOIN users r ON r.referred_by = p.id
-      WHERE COALESCE(p.is_partner, false) = true OR EXISTS (SELECT 1 FROM users WHERE referred_by = p.id)
-      GROUP BY p.id, p.telegram_id, p.username, p.first_name, p.referral_code, p.is_premium_partner
-      ORDER BY total_referral_losses DESC
-    `)
+      is_premium_partner: number
+      created_at: string
+      ref_count: number
+      total_earned: number
+    }>(
+      `SELECT
+         u.id, u.telegram_id, u.username, u.first_name, u.is_premium_partner, u.created_at,
+         (SELECT COUNT(*) FROM users WHERE referred_by = u.id) as ref_count,
+         (SELECT COALESCE(SUM(amount), 0) FROM partner_earnings WHERE partner_id = u.id AND status = 'paid') as total_earned
+       FROM users u
+       WHERE (u.is_partner = 1 OR u.is_premium_partner = 1)
+          OR (SELECT COUNT(*) FROM users WHERE referred_by = u.id) > 0
+       ORDER BY ref_count DESC
+       LIMIT 100`,
+      []
+    )
 
-    const partners = partnersResult.rows.map(row => ({
+    const partners = result.rows.map(row => ({
       id: row.id,
       telegram_id: row.telegram_id,
       username: row.username,
       first_name: row.first_name,
-      referral_code: row.referral_code,
-      is_premium_partner: row.is_premium_partner,
-      total_referrals: parseInt(row.total_referrals),
-      active_referrals: parseInt(row.active_referrals),
-      total_referral_wagered: parseFloat(row.total_referral_wagered),
-      total_referral_losses: parseFloat(row.total_referral_losses),
-      total_paid: parseFloat(row.total_paid),
-      pending_earnings: parseFloat(row.pending_earnings),
+      is_premium_partner: row.is_premium_partner === 1,
+      created_at: row.created_at,
+      ref_count: row.ref_count,
+      total_earned: row.total_earned,
     }))
 
     // Aggregate stats
-    const totalReferrals = partners.reduce((s, p) => s + p.total_referrals, 0)
-    const totalPartnerEarnings = partners.reduce((s, p) => s + p.total_paid, 0)
-    const pendingPayouts = partners.reduce((s, p) => s + p.pending_earnings, 0)
+    const totalReferrals = partners.reduce((s, p) => s + p.ref_count, 0)
+    const totalPartnerEarnings = partners.reduce((s, p) => s + p.total_earned, 0)
+    const pendingPayouts = 0  // Would need additional query to calculate
 
     const stats = {
       totalPartners: partners.length,
@@ -90,9 +68,9 @@ export async function POST(request: NextRequest) {
       if (!userId) {
         return NextResponse.json({ success: false, error: "Missing userId" }, { status: 400 })
       }
-      await query(
-        "UPDATE users SET is_premium_partner = $2 WHERE id = $1",
-        [userId, !!isPremium]
+      query(
+        "UPDATE users SET is_premium_partner = ? WHERE id = ?",
+        [isPremium ? 1 : 0, userId]
       )
       return NextResponse.json({
         success: true,
@@ -106,24 +84,24 @@ export async function POST(request: NextRequest) {
       }
       
       // Check if user exists
-      const userResult = await query<{ id: string; first_name: string; is_partner: boolean }>(
-        "SELECT id, first_name, COALESCE(is_partner, false) as is_partner FROM users WHERE telegram_id = $1",
+      const userResult = query<{ id: string; first_name: string; is_partner: number }>(
+        "SELECT id, first_name, COALESCE(is_partner, 0) as is_partner FROM users WHERE telegram_id = ?",
         [telegramId]
       )
-      
+
       if (userResult.rows.length === 0) {
         return NextResponse.json({ success: false, error: "Пользователь с таким Telegram ID не найден" }, { status: 404 })
       }
-      
+
       const user = userResult.rows[0]
-      
-      if (user.is_partner) {
+
+      if (user.is_partner === 1) {
         return NextResponse.json({ success: false, error: "Пользователь уже является партнером" }, { status: 400 })
       }
-      
+
       // Mark user as partner
-      await query(
-        "UPDATE users SET is_partner = true WHERE id = $1",
+      query(
+        "UPDATE users SET is_partner = 1 WHERE id = ?",
         [user.id]
       )
       
@@ -139,8 +117,8 @@ export async function POST(request: NextRequest) {
       }
       
       // Remove partner status
-      await query(
-        "UPDATE users SET is_partner = false, is_premium_partner = false WHERE id = $1",
+      query(
+        "UPDATE users SET is_partner = 0, is_premium_partner = 0 WHERE id = ?",
         [userId]
       )
       

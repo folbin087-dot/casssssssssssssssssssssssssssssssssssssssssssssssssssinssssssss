@@ -24,35 +24,35 @@ export async function GET(request: NextRequest) {
   
   try {
     // Get user
-    const user = await getUserByTelegramId(telegramId)
-    
+    const user = getUserByTelegramId(telegramId)
+
     if (!user) {
       return NextResponse.json(
         { success: false, error: "User not found" },
         { status: 404 }
       )
     }
-    
+
     // Get transactions
-    const result = await query<Transaction>(
-      `SELECT id, type, amount, game, created_at 
-       FROM transactions 
-       WHERE user_id = $1 
-       ORDER BY created_at DESC 
-       LIMIT $2 OFFSET $3`,
+    const result = query<Transaction>(
+      `SELECT id, type, amount, game, created_at
+       FROM transactions
+       WHERE user_id = ?
+       ORDER BY created_at DESC
+       LIMIT ? OFFSET ?`,
       [user.id, limit, offset]
     )
-    
+
     // Get total count
-    const countResult = await query<{ count: string }>(
-      `SELECT COUNT(*) FROM transactions WHERE user_id = $1`,
+    const countResult = query<{ count: number }>(
+      `SELECT COUNT(*) as count FROM transactions WHERE user_id = ?`,
       [user.id]
     )
-    
+
     return NextResponse.json({
       success: true,
       transactions: result.rows,
-      total: parseInt(countResult.rows[0].count),
+      total: countResult.rows[0].count,
       limit,
       offset,
     })

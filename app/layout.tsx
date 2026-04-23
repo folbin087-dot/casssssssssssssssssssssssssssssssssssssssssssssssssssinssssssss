@@ -29,6 +29,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ru">
+      <head>
+        {/* Telegram WebApp SDK - CRITICAL for Mini App functionality */}
+        <script src="https://telegram.org/js/telegram-web-app.js" async></script>
+      </head>
       <body className={`${rubik.variable} font-sans antialiased`}>
         {children}
         <Analytics />
